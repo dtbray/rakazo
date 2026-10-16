@@ -131,19 +131,21 @@ async function start(
   link = false,
   callbackURL = `${origin}/app`,
   reauthenticate = false,
+  additionalData: Record<string, unknown> = {},
 ) {
   const response = await request(link ? "/link-social" : "/sign-in/social", {
     provider: "oidc",
     callbackURL,
     errorCallbackURL: `${origin}/sign-in`,
     disableRedirect: true,
-    ...(reauthenticate ? { additionalData: { reauthenticate: true } } : {}),
+    additionalData: { ...additionalData, ...(reauthenticate ? { reauthenticate: true } : {}) },
   });
   expect(response.status, await response.clone().text()).toBe(200);
   const url = new URL(((await response.json()) as { url: string }).url);
   const code = `code-${++sequence}`;
   expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-  expect(url.searchParams.get("prompt")).toBe("login");
+  expect(url.searchParams.get("prompt")).toBe(reauthenticate ? "login" : null);
+  expect(url.searchParams.get("max_age")).toBe(reauthenticate ? "0" : null);
   codes.set(code, {
     challenge: url.searchParams.get("code_challenge")!,
     nonce: url.searchParams.get("nonce")!,
@@ -517,18 +519,112 @@ describe("OIDC callbacks", () => {
 });
 
 describe("SSO-only account deletion", () => {
-  it("allows a fresh provider sign-in and removes the account", async () => {
+  it("requires an authenticated session before starting reauthentication", async () => {
+    setup();
+    const response = await request("/sign-in/social", {
+      provider: "oidc",
+      callbackURL: `${origin}/app`,
+      additionalData: { reauthenticate: true },
+    });
+    expect(response.status).toBe(401);
+    expect(rows("session")).toHaveLength(0);
+  });
+
+  it("does not trust client-supplied reauthentication context", async () => {
     setup();
     await signIn();
+    const userId = rows("user")[0]!.id;
+    await request(
+      await start(undefined, false, `${origin}/app`, false, {
+        reauthUserId: userId,
+        serverContext: { reauthUserId: userId },
+      }),
+    );
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: false,
+    });
+    expect((await request("/delete-user", {})).status).toBe(403);
+  });
+
+  it("does not let client authorization parameters weaken reauthentication", async () => {
+    setup();
+    await signIn();
+    const response = await request("/sign-in/social", {
+      provider: "oidc",
+      callbackURL: `${origin}/app`,
+      disableRedirect: true,
+      additionalData: { reauthenticate: true },
+      additionalParams: { prompt: "none", max_age: "86400" },
+    });
+    expect(response.status).toBe(200);
+    const url = new URL(((await response.json()) as { url: string }).url);
+    expect(url.searchParams.get("prompt")).toBe("login");
+    expect(url.searchParams.get("max_age")).toBe("0");
+  });
+
+  it("keeps ordinary and explicit sign-in policy separate in concurrent requests", async () => {
+    setup();
+    await signIn();
+    const urls = await Promise.all(
+      [false, true].map(async (reauthenticate) => {
+        const response = await request("/sign-in/social", {
+          provider: "oidc",
+          callbackURL: `${origin}/app`,
+          disableRedirect: true,
+          additionalData: { reauthenticate },
+        });
+        expect(response.status).toBe(200);
+        return new URL(((await response.json()) as { url: string }).url);
+      }),
+    );
+    expect(urls[0]!.searchParams.get("prompt")).toBeNull();
+    expect(urls[0]!.searchParams.get("max_age")).toBeNull();
+    expect(urls[1]!.searchParams.get("prompt")).toBe("login");
+    expect(urls[1]!.searchParams.get("max_age")).toBe("0");
+  });
+
+  it("does not transfer a previous reauthentication proof to a normal sign-in", async () => {
+    setup();
+    await signIn();
+    await request(await start(undefined, false, `${origin}/app`, true));
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: true,
+    });
+    await signIn();
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: false,
+    });
+    expect((await request("/delete-user", {})).status).toBe(403);
+  });
+
+  it("requires explicit reauthentication instead of treating SSO sign-in as fresh proof", async () => {
+    setup();
+    await signIn({
+      sub: "subject-1",
+      email: "sso@example.test",
+      email_verified: true,
+      auth_time: Math.floor(Date.now() / 1000) - 86400,
+    });
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: false,
+    });
+    expect((await request("/delete-user", {})).status).toBe(403);
+    await request(await start(undefined, false, `${origin}/app`, true));
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: true,
+    });
     expect((await request("/delete-user", {})).status).toBe(200);
     expect(rows("user")).toHaveLength(0);
   });
   it("refuses a stale session, then accepts fresh reauthentication", async () => {
     setup();
     await signIn();
+    await request(await start(undefined, false, `${origin}/app`, true));
     expireOidcProofs();
     expect((await request("/delete-user", {})).status).toBe(403);
     await signIn();
+    expect((await request("/delete-user", {})).status).toBe(403);
+    await request(await start(undefined, false, `${origin}/app`, true));
     expect((await request("/delete-user", {})).status).toBe(200);
     expect(rows("user")).toHaveLength(0);
   });

@@ -234,6 +234,12 @@ current provider, so **Link SSO** becomes available again. Link the new identity
 existing signed-in account; authenticated-session, verified-email and matching-email checks
 still apply. Restoring the old issuer makes its existing links usable again.
 
+Ordinary SSO sign-in and linking may reuse the identity provider's existing session. They
+do not grant fresh authentication proof for account deletion. The account settings' explicit
+reauthentication flow requests `prompt=login` and `max_age=0`, binds the callback to the
+signed-in account, and grants a five-minute proof only to the resulting session. Password
+verification and emailed deletion codes remain available as before.
+
 SSO signup follows closed registration and the deployment allowlist before creating an account.
 Allowlisted provider emails must be verified; the password signup's first-account exemption
 never upgrades an OIDC email. `OIDC_ALLOW_SIGNUP_BYPASS=true` explicitly admits IdP identities

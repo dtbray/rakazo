@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BetterAuthPlugin } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, getOAuthState } from "better-auth/api";
 import { genericOAuth } from "better-auth/plugins";
 
 export interface OidcConfig {
@@ -30,9 +30,6 @@ export function oidcDiscovery(config: OidcConfig) {
           return oidcAccountSubject(config.issuer, profile.sub);
         },
         requireIdTokenVerification: true,
-        // Every round-trip can serve as fresh authentication for account deletion.
-        prompt: "login",
-        authorizationUrlParams: { max_age: "0" },
         mapProfileToUser: (profile) => ({ emailVerified: profile.email_verified === true }),
       },
     ],
@@ -112,7 +109,17 @@ export function oidcDiscovery(config: OidcConfig) {
         name: config.name,
         issuer: config.issuer,
         requiresIdTokenNonce: true,
-        createAuthorizationURL: async (data) => (await getProvider()).createAuthorizationURL(data),
+        createAuthorizationURL: async (data) => {
+          const url = await (await getProvider()).createAuthorizationURL(data);
+          // Only authenticated, server-bound reauthentication needs an interactive
+          // provider login. Apply these last so client parameters cannot weaken it.
+          const expectedUser = (await getOAuthState())?.serverContext?.reauthUserId;
+          if (typeof expectedUser === "string") {
+            url.searchParams.set("prompt", "login");
+            url.searchParams.set("max_age", "0");
+          }
+          return url;
+        },
         validateAuthorizationCode: async (data) =>
           (await getProvider()).validateAuthorizationCode(data),
         getUserInfo: async (tokens) =>

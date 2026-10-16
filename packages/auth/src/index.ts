@@ -514,7 +514,13 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
             }
           },
           after: async (session, ctx) => {
-            if (ctx && isOidcCallback(ctx)) {
+            const expectedUser =
+              ctx && isOidcCallback(ctx)
+                ? (await getOAuthState())?.serverContext?.reauthUserId
+                : undefined;
+            // An ordinary SSO callback may reuse an old IdP session; it is not
+            // fresh proof for destructive actions.
+            if (ctx && expectedUser === session.userId) {
               await ctx.context.internalAdapter.createVerificationValue({
                 identifier: oidcProofKey(session.id),
                 value: session.userId,
