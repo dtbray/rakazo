@@ -11,7 +11,6 @@ import {
 import { bearer } from "better-auth/plugins";
 import { isCurrentOidcAccount } from "./oidc.js";
 
-export const OIDC_FRESH_AGE = 5 * 60;
 export const oidcProofKey = (sessionId: string) => `oidc-reauth-${sessionId}`;
 
 export function accountSecurity(

@@ -149,7 +149,10 @@ async function start(
   codes.set(code, {
     challenge: url.searchParams.get("code_challenge")!,
     nonce: url.searchParams.get("nonce")!,
-    claims,
+    claims: {
+      ...(reauthenticate ? { auth_time: Math.floor(Date.now() / 1_000) } : {}),
+      ...claims,
+    },
   });
   return `/callback/oidc?state=${url.searchParams.get("state")}&code=${code}`;
 }
@@ -519,6 +522,69 @@ describe("OIDC callbacks", () => {
 });
 
 describe("SSO-only account deletion", () => {
+  it.each([
+    ["missing", undefined],
+    ["stale", -3_600],
+    ["future", 120],
+    ["string", "0"],
+    ["null", null],
+  ])("rejects reauthentication with a %s signed auth_time", async (_name, offset) => {
+    setup();
+    await signIn();
+    const authTime = typeof offset === "number" ? Math.floor(Date.now() / 1_000) + offset : offset;
+    const response = await request(
+      await start(
+        {
+          sub: "subject-1",
+          email: "sso@example.test",
+          email_verified: true,
+          auth_time: authTime,
+        },
+        false,
+        `${origin}/app`,
+        true,
+      ),
+    );
+    expect(response.headers.get("location")).toContain("error=");
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: false,
+    });
+    expect((await request("/delete-user", {})).status).toBe(403);
+  });
+
+  it("accepts a signed fractional auth_time within the request window", async () => {
+    setup();
+    await signIn();
+    const response = await request(
+      await start(
+        {
+          sub: "subject-1",
+          email: "sso@example.test",
+          email_verified: true,
+          auth_time: Date.now() / 1_000 - 0.5,
+        },
+        false,
+        `${origin}/app`,
+        true,
+      ),
+    );
+    expect(response.headers.get("location")).toBe(`${origin}/app`);
+    expect(await (await request("/account-security")).json()).toMatchObject({
+      freshOidcAuth: true,
+    });
+  });
+
+  it("rejects provider authentication that ages out before the callback", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    setup();
+    await signIn();
+    const callback = await start(undefined, false, `${origin}/app`, true);
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    const response = await request(callback);
+    expect(response.headers.get("location")).toContain("error=");
+    expect((await request("/delete-user", {})).status).toBe(403);
+  });
+
   it("requires an authenticated session before starting reauthentication", async () => {
     setup();
     const response = await request("/sign-in/social", {

@@ -19,14 +19,9 @@ import {
   getOAuthState,
 } from "better-auth/api";
 import { bearer, organization } from "better-auth/plugins";
-import {
-  accountSecurity,
-  OIDC_FRESH_AGE,
-  oidcProofKey,
-  sessionForAuthHook,
-} from "./account-security.js";
+import { accountSecurity, oidcProofKey, sessionForAuthHook } from "./account-security.js";
 import type { OidcConfig } from "./oidc.js";
-import { oidcDiscovery } from "./oidc.js";
+import { OIDC_FRESH_AGE, oidcDiscovery } from "./oidc.js";
 
 export type { OidcConfig } from "./oidc.js";
 
@@ -376,7 +371,10 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
         ) {
           const session = await sessionForAuthHook(ctx);
           if (!session || isMessagingEmail(session.user.email)) throw new APIError("UNAUTHORIZED");
-          await addOAuthServerContext({ reauthUserId: session.user.id });
+          await addOAuthServerContext({
+            reauthUserId: session.user.id,
+            reauthStartedAt: Math.floor(Date.now() / 1_000),
+          });
         }
         for (const value of [ctx.body?.email, ctx.body?.newEmail]) {
           if (typeof value === "string" && isMessagingEmail(value)) {

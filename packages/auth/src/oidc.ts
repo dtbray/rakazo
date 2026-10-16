@@ -3,6 +3,9 @@ import type { BetterAuthPlugin } from "better-auth";
 import { APIError, getOAuthState } from "better-auth/api";
 import { genericOAuth } from "better-auth/plugins";
 
+export const OIDC_FRESH_AGE = 5 * 60;
+const OIDC_CLOCK_SKEW = 60;
+
 export interface OidcConfig {
   issuer: string;
   clientId: string;
@@ -122,8 +125,31 @@ export function oidcDiscovery(config: OidcConfig) {
         },
         validateAuthorizationCode: async (data) =>
           (await getProvider()).validateAuthorizationCode(data),
-        getUserInfo: async (tokens) =>
-          tokens.idToken ? (await getProvider()).getUserInfo(tokens) : null,
+        getUserInfo: async (tokens) => {
+          if (!tokens.idToken) return null;
+          // The provider verifies the signature, issuer, audience and nonce first.
+          const info = await (await getProvider()).getUserInfo(tokens);
+          if (!info) return null;
+          const context = (await getOAuthState())?.serverContext;
+          if (typeof context?.reauthUserId === "string") {
+            const startedAt = context.reauthStartedAt;
+            const { auth_time: authTime } = JSON.parse(
+              Buffer.from(tokens.idToken.split(".")[1] ?? "", "base64url").toString(),
+            );
+            const now = Math.floor(Date.now() / 1_000);
+            if (
+              typeof startedAt !== "number" ||
+              !Number.isSafeInteger(startedAt) ||
+              typeof authTime !== "number" ||
+              !Number.isFinite(authTime) ||
+              authTime < startedAt - OIDC_CLOCK_SKEW ||
+              authTime > now + OIDC_CLOCK_SKEW ||
+              authTime <= now - OIDC_FRESH_AGE
+            )
+              return null;
+          }
+          return info;
+        },
         accountSubject: async (data) => {
           const resolved = await getProvider();
           if (!resolved.accountSubject) throw unavailable();
