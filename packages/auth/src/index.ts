@@ -251,7 +251,6 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
     account: {
       accountLinking: { enabled: true, disableImplicitLinking: true, trustedProviders: [] },
     },
-    advanced: { disableOriginCheck: false },
     rateLimit: authRateLimitOptions(),
     database: prismaAdapter(prisma, { provider: "postgresql" }),
     emailAndPassword: {

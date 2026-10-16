@@ -111,6 +111,10 @@ async function request(
     if (value === null) headers.delete(key);
     else headers.set(key, value);
   }
+  // Better Auth disables origin checks in tests; exercise production CSRF behavior here.
+  const context = await auth.$context;
+  context.skipOriginCheck = false;
+  context.skipCSRFCheck = false;
   const response = await auth.handler(
     new Request(`${origin}/api/auth${path}`, {
       method: body === undefined ? "GET" : "POST",
