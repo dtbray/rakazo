@@ -504,8 +504,14 @@ describe("OIDC callbacks", () => {
     async (reauthenticate) => {
       setup();
       await signIn();
-      const callback = await start({ sub: "subject-1" }, false, `${origin}/app`, reauthenticate);
-      userInfoClaims.sub = "different-subject";
+      // A valid token for another subject must not become this user's account
+      // through a UserInfo response naming their already-linked subject.
+      const callback = await start(
+        { sub: "other-subject" },
+        false,
+        `${origin}/app`,
+        reauthenticate,
+      );
       const before = structuredClone({
         users: rows("user"),
         accounts: rows("account"),
